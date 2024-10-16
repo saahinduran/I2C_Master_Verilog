@@ -4,7 +4,7 @@
 
 module i2c_controller
 #( 
-    parameter FPGA_CLK_FREQ = 27_000_000,   // Default 50 MHz FPGA clock
+    parameter FPGA_CLK_FREQ = 27_000_000,   // Default 27 MHz FPGA clock
     parameter I2C_FREQ = 100_000           // Default 100 kHz I2C frequency
 )
 (
@@ -38,7 +38,7 @@ module i2c_controller
 	
 	`ifdef DEBUG
 			// Behavior for simulation
-			localparam DIVIDE_BY = 4;
+			localparam DIVIDE_BY = 10;
 	`else
 			// Behavior for synthesis
 			localparam DIVIDE_BY = FPGA_CLK_FREQ / I2C_FREQ;
@@ -50,26 +50,66 @@ module i2c_controller
 	reg [7:0] saved_data;
 	reg [7:0] counter;
 	reg [7:0] counter2 = 0;
+	reg [7:0] clk_count = 0; 
 	reg write_enable;
 	reg sda_out;
 	reg i2c_scl_enable = 0;
-	reg i2c_clk = 1'b1;
+	reg i2c_clk = 1'b0;
 	reg is_ack = 1'b0;
-
+	
+	reg clk_en_rise = 1'b0;
+	reg clk_en_fall = 1'b0;
+	
 	assign ready = ((rst == 0) && (state == IDLE)) ? 1 : 0;
 	assign i2c_scl = (i2c_scl_enable == 0 ) ? 1'bz : ~i2c_clk; // if debug: 1'b1, if release: 1'bz
 	assign i2c_sda = (write_enable == 1) ? sda_out : 1'bz; // if debug: 1'b1, if release: 1'bz
 	
-	always @(posedge clk) begin
-		if (counter2 == (DIVIDE_BY/2) - 1) begin
-			i2c_clk <= ~i2c_clk;
-			counter2 <= 0;
-		end
-		else counter2 <= counter2 + 1;
-	end 
-	
+	/* Clock generation unit */
+always @(posedge clk or posedge rst) begin
+    if (rst) begin
+        clk_en_rise <= 1'b0;
+        clk_en_fall <= 1'b0;
+        i2c_clk <= 1'b0;
+        clk_count <= 9'b0;
+    end else begin
+        // Clock enable for rising edge of i2c clock
+        if (clk_count == 9'd0) begin
+            clk_en_rise <= 1'b1;
+        end else begin
+            clk_en_rise <= 1'b0;
+        end
+				
+				
+				if (clk_count == 9'd1) begin
+            i2c_clk <= ~i2c_clk;
+        end
+				
+				
+        
+        // Clock enable for rising edge of i2c clock
+        if (clk_count == (DIVIDE_BY/2) ) begin
+            clk_en_fall <= 1'b1;
+        end else begin
+            clk_en_fall <= 1'b0;
+        end
+				
+				if (clk_count == (DIVIDE_BY/2) +1) begin
+            i2c_clk <= ~i2c_clk;
+        end
+        
+         
+        if (clk_count == (DIVIDE_BY - 1)) begin
+                clk_count <= 9'b0;
+                
+        end
+        else begin
+            clk_count <= clk_count + 1;  
+         end
+    end
+end
 
-	always @(posedge i2c_clk, posedge rst) begin
+
+	always @(posedge clk, posedge rst) begin
 		if(rst == 1) begin
 			state <= IDLE;
 			i2c_scl_enable <= 0;
@@ -78,6 +118,7 @@ module i2c_controller
 			write_done <= 1'b0;
 		end		
 		else begin
+			if(clk_en_rise) begin
 			data_rdy <= 1'b0;
 			write_done <= 1'b0;
 			case(state)
@@ -216,10 +257,11 @@ module i2c_controller
 			endcase
 		end
 	end
+end
 	
-	always @(negedge i2c_clk) begin
+	always @(posedge clk) begin
 
-
+	if(clk_en_fall) begin
 			case(state)
 				
 				ADDRESS: begin
@@ -260,5 +302,5 @@ module i2c_controller
 			endcase
 		end
 
-
+end
 endmodule
